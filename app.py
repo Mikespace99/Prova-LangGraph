@@ -87,7 +87,7 @@ def router_node(state: State) -> Dict:
     Messaggio utente: "{state['user_input']}"
     
     Rispondi ESCLUSIVAMENTE con una di queste tre parole:
-    - 'CONFERMA': se l'utente accetta, sceglie o conferma chiaramente uno degli slot sopra indicati (es: "Prendo lunedì alle 11:30", "Ok per martedì 15:30").
+    - 'CONFERMA': se l'utente accetta, sceglie o conferma chiaramente uno degli slot sopra indicati (es: "Prendo lunedì alle 11:30", "Ok per martedì 15:30", "confermo per venerdì").
     - 'PRENOTAZIONE': se l'utente esprime solo il desiderio generale di prenotare o chiede quali sono i posti liberi.
     - 'ALTRO': se saluta, ringrazia o fa domande non inerenti.
     
@@ -130,29 +130,29 @@ def conferma_node(state: State) -> Dict:
     
     Scelta dell'utente: "{state['user_input']}"
     
-    Rispondi ESCLUSIVAMENTE con la riga esatta presa dalla lista (es: "Lunedì - 11:30"). Se non trovi una corrispondenza esatta, rispondi 'ERRORE'.
+    Rispondi ESCLUSIVAMENTE con la riga esatta presa dalla lista (es: "Venerdì - 10:30"). Se non trovi una corrispondenza esatta, rispondi 'ERRORE'.
     Risposta:"""
     
     stringa_slot = llm.invoke([HumanMessage(content=prompt_estrazione)]).content.strip()
     
     if "ERRORE" not in stringa_slot:
-        # Eseguiamo la cancellazione fisica dal file txt!
+        # Eseguiamo la cancellazione fisica dal file txt
         successo = remove_slot_from_txt(stringa_slot)
         if successo:
             risposta_conferma = f"🎉 Perfetto! Ho registrato la tua prenotazione per **{stringa_slot}**. Lo slot è stato ufficialmente bloccato."
-            return {"booking_status": "CONFERMATA", "bot_response": respuesta_conferma, "slot_selezionato": stringa_slot}
+            return {"booking_status": "CONFERMATA", "bot_response": risposta_conferma, "slot_selezionato": stringa_slot}
             
     risposta_errore = "Non sono riuscito a trovare o bloccare l'orario richiesto. Potrebbe essere stato appena occupato. Ti dispiace scegliere un altro slot?"
     return {"booking_status": "In corso", "bot_response": risposta_errore, "slot_selezionato": ""}
 
 def fallback_node(state: State) -> Dict:
-    """Gestisce chiacchiere generali"""
+    """Gestisce chiacchiere o saluti generali"""
     prompt = [
         SystemMessage(content="Sei un assistente virtuale cordiale. Rispondi in modo naturale e conciso."),
         HumanMessage(content=state['user_input'])
     ]
     risposta = llm.invoke(prompt).content
-    return {"bot_response": risposte}
+    return {"bot_response": risposta}
 
 
 # --- 3. LOGICA DEI BORDI CONDIZIONALI ---
@@ -219,7 +219,6 @@ if prompt_utente := st.chat_input("Scrivi qui..."):
     with st.spinner("🤖 Controllo ed elaborazione del file..."):
         risultato_grafo = graph.invoke(stato_iniziale)
         risposta_finale = risultato_grafo["bot_response"]
-        # Aggiorna lo stato globale della sessione
         st.session_state.booking_status = risultato_grafo["booking_status"]
 
     with st.chat_message("assistant"):
