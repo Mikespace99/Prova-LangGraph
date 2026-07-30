@@ -1,222 +1,182 @@
 import os
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import streamlit as st
-from typing import Dict, TypedDict
+from pydantic import BaseModel, Field
+from typing import Dict, TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-# Configurazione logger
+# Configurazione Log e Streamlit
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Interfaccia Streamlit
-st.set_page_config(page_title="LangGraph Smart Calendar", page_icon="📅")
-st.title("📅 Assistente Appuntamenti con Datetime")
-st.write("Flusso d'azione LangGraph con calcolo del tempo reale in Python.")
+st.set_page_config(page_title="LangGraph Smart Assistant", page_icon="📅")
+st.title("📅 Assistente Appuntamenti Architettato in JSON")
 
-# Recupero chiave API
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
-    st.error("⚠️ Chiave API di OpenAI mancante! Impostala su Render.")
+    st.error("⚠️ Chiave API di OpenAI mancante su Render!")
     st.stop()
 
+# Inizializzazione LLM rigido (temperature=0)
 llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key, temperature=0)
 
-TXT_FILE = "calendario.txt"
+JSON_FILE = "calendario.json"
 
-# --- CALCOLO DELLA DATA CORRENTE IN PYTHON ---
-def get_current_time_context() -> str:
-    """Restituisce il giorno della settimana e la data odierna per ancorare l'LLM"""
-    giorni_settimana = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
-    ora_attuale = datetime.now()
-    nome_giorno = giorni_settimana[ora_attuale.weekday()]
-    return f"Oggi è {nome_giorno}, data: {ora_attuale.strftime('%Y-%m-%d')} (Formato: AAAA-MM-GG)."
+# --- STRUTTURA PYDANTIC PER IL PARSING DI OPENAI ---
+class UserIntent(BaseModel):
+    intento: str = Field(description="Classificazione rigorosa dell'azione dell'utente: 'PRENOTAZIONE', 'CONFERMA', 'INFO', 'ALTRO'")
+    orizzonte_temporale: str = Field(description="Il periodo espresso dall'utente: 'questa_settimana', 'prossima_settimana', 'giorno_specifico', 'generico'")
+    giorno_indicato: Optional[str] = Field(None, description="Il giorno della settimana o data menzionata, convertito in minuscolo italiano (es. 'venerdì', 'martedì')")
+    ora_indicata: Optional[str] = Field(None, description="L'orario preciso menzionato (es. '10:30')")
 
-def get_free_slots_from_txt() -> str:
-    """Legge il file calendario.txt e restituisce tutti gli slot liberi strutturati"""
-    if not os.path.exists(TXT_FILE):
-        return "Nessuno slot inserito nel sistema."
-        
-    elenco_liberi = ""
-    with open(TXT_FILE, "r", encoding="utf-8") as file:
-        for riga in file:
-            riga = riga.strip()
-            if riga:
-                elenco_liberi += f"{riga}\n"
-                
-    if not elenco_liberi.strip():
-        return "Tutti gli slot sono esauriti."
-        
-    return elenco_liberi
+# Creiamo un parser LLM strutturato che restituisce SOLO la classe Pydantic/JSON
+llm_strutturato = llm.with_structured_output(UserIntent)
 
-def remove_slot_from_txt(slot_da_cancellare: str) -> bool:
-    """Riscrive il file rimuovendo la riga esatta dello slot prenotato"""
-    if not os.path.exists(TXT_FILE) or not slot_da_cancellare:
-        return False
-        
-    righe_da_salvare = []
-    trovato = False
+# --- FUNZIONI LOCALI DI GESTIONE TEMPO E DATI ---
+def get_current_context() -> str:
+    giorni = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+    oggi = datetime.now()
+    return f"Contesto Temporale: Oggi è {giorni[oggi.weekday()]} {oggi.strftime('%Y-%m-%d')}."
+
+def leggi_calendario() -> list:
+    if not os.path.exists(JSON_FILE):
+        return []
+    with open(JSON_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def scrivi_calendario(dati: list):
+    with open(JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(dati, f, indent=2)
+
+def filtra_slot_python(orizzonte: str, giorno: Optional[str]) -> list:
+    """Filtra matematicamente in Python le date del JSON evitando fraintendimenti del LLM"""
+    oggi = datetime.now()
+    slot_totali = leggi_calendario()
+    slot_liberi = [s for s in slot_totali if s["disponibile"]]
     
-    with open(TXT_FILE, "r", encoding="utf-8") as file:
-        for riga in file:
-            riga_pulita = riga.strip()
-            if riga_pulita and riga_pulita.lower() in slot_da_cancellare.lower():
-                trovato = True
-            elif riga_pulita:
-                righe_da_salvare.append(riga_pulita)
-                
-    with open(TXT_FILE, "w", encoding="utf-8") as file:
-        for riga in righe_da_salvare:
-            file.write(riga + "\n")
+    # Calcolo inizio e fine prossima settimana (Prossimo Lunedì)
+    giorni_a_lunedi = (0 - oggi.weekday()) % 7
+    if i_giorni_a_lunedi := giorni_a_lunedi == 0: giorni_a_lunedi = 7
+    inizio_prossima = (oggi + timedelta(days=giorni_a_lunedi)).replace(hour=0, minute=0, second=0)
+    fine_prossima = inizio_prossima + timedelta(days=7)
+    
+    risultato = []
+    giorni_mappa = {0: "lunedì", 1: "martedì", 2: "mercoledì", 3: "giovedì", 4: "venerdì", 5: "sabato", 6: "domenica"}
+    
+    for s in slot_liberi:
+        dt_slot = datetime.fromisoformat(s["data_ora"])
+        giorno_sett_slot = giorni_mappa[dt_slot.weekday()]
+        
+        # Filtro temporale rigido basato sui timestamp Python
+        if orizzonte == "prossima_settimana" and not (inizio_prossima <= dt_slot < fine_prossima):
+            continue
+        if orizzonte == "questa_settimana" and not (oggi <= dt_slot < inizio_prossima):
+            continue
+        if giorno and giorno.lower() != giorno_sett_slot:
+            continue
             
-    return trovato
+        risultato.append(s)
+    return resultado
 
-# --- 1. DEFINIZIONE DELLO STATO ---
+# --- DEFINIZIONE DELLO STATO COMPOSITO ---
 class State(TypedDict):
     user_input: str
-    booking_status: str     
-    graph_action: str       
+    booking_status: str
+    graph_action: str
     bot_response: str
-    slot_selezionato: str   
+    dati_estratti: Dict  # Salva il JSON strutturato estratto dall'utente nei vari passaggi
 
-# --- 2. DEFINIZIONE DEI NODI ---
+# --- DEFINIZIONE DEI NODI ---
 def router_node(state: State) -> Dict:
-    """Classifica l'intento calcolando le date relative espresse dall'utente"""
-    slot_disponibili = get_free_slots_from_txt()
-    contesto_temporale = get_current_time_context()
-    
-    prompt = f"""{contesto_temporale}
-    
-    SLOT ANCORA DISPONIBILI NEL REGISTRO (Formato AAAA-MM-GG OORA:MM):
-    {slot_disponibili}
-    
-    MESSAGGIO UTENTE:
-    "{state['user_input']}"
-    
-    Regole di classificazione:
-    - CONFERMA: l'utente sceglie uno slot specifico. Se usa termini come "domani", "prossimo venerdì", "venerdì va bene", usa il contesto temporale per capire a quale data numerica corrisponde. Se corrisponde a uno slot in lista, rispondi CONFERMA.
-    - PRENOTAZIONE: l'utente vuole fare una prenotazione generica o chiede la lista dei posti liberi.
-    - INFO: l'utente fa domande generali.
-    - ALTRO: saluti o chiacchiere.
-    
-    Rispondi ESCLUSIVAMENTE con una parola tra: CONFERMA, PRENOTAZIONE, INFO, ALTRO."""
-    
+    """NLU Puro: Trasforma il testo dell'utente in un JSON strutturato stabile"""
+    contesto = get_current_context()
+    prompt = f"""{contesto}
+    Analizza la richiesta dell'utente e popola la struttura JSON dei dati estratti.
+    Testo utente: "{state['user_input']}"
+    """
     try:
-        risposta = llm.invoke([HumanMessage(content=prompt)]).content.strip().upper()
+        estrazione: UserIntent = llm_strutturato.invoke([HumanMessage(content=prompt)])
+        dati_json = estrazione.model_dump()
     except Exception:
-        logger.exception("Errore in router_node")
-        return {"graph_action": "vai_a_fallback"}
-        
-    if "CONFERMA" in risposta:
-        return {"graph_action": "vai_a_conferma"}
-    if "PRENOTAZIONE" in risposta:
-        return {"graph_action": "vai_a_booking"}
-    if "INFO" in risposta:
-        return {"graph_action": "vai_a_info"}
-    return {"graph_action": "vai_a_fallback"}
+        logger.exception("Fallimento estrazione strutturata")
+        dati_json = {"intento": "ALTRO", "orizzonte_temporale": "generico", "giorno_indicato": None, "ora_indicated": None}
+    
+    # Decidi il percorso in base all'intento estratto nel JSON
+    mappa_azioni = {"CONFERMA": "vai_a_conferma", "PRENOTAZIONE": "vai_a_booking", "INFO": "vai_a_info"}
+    azione = mappa_azioni.get(dati_json["intento"], "vai_a_fallback")
+    
+    return {"graph_action": action, "dati_estratti": dati_json}
 
 def booking_node(state: State) -> Dict:
-    slot_reali_liberi = get_free_slots_from_txt()
-    contesto_temporale = get_current_time_context()
+    """Prende i dati filtrati matematicamente da Python e genera la risposta d'aiuto"""
+    dati = state["dati_estratti"]
+    slot_filtrati = filtra_slot_python(dati["orizzonte_temporale"], dati["giorno_indicato"])
     
-    prompt = [
-        SystemMessage(content=(
-            f"{contesto_temporale}\n"
-            "Sei l'assistente per le prenotazioni. Mostra gli slot traducendo i codici AAAA-MM-GG in giorni leggibili "
-            "(es. 'Venerdì 31 Luglio alle 09:00') per l'utente, ma mantieni internamente il riferimento rigido.\n\n"
-            f"LISTA SLOT DISPONIBILI:\n{slot_reali_liberi}\n"
-            "Chiedi all'utente di confermare quale preferisce."
-        )),
-        HumanMessage(content=state['user_input'])
-    ]
-    try:
-        risposta = llm.invoke(prompt).content
-    except Exception:
-        logger.exception("Errore in booking_node")
-        risposta = "Errore nel caricamento degli slot."
-    return {"booking_status": "In corso", "bot_response": risposta, "slot_selezionato": ""}
-
-def info_node(state: State) -> Dict:
-    slot_reali_liberi = get_free_slots_from_txt()
-    prompt = [
-        SystemMessage(content=f"Fornisci un riassunto delle disponibilità basandoti solo su questo elenco:\n{slot_reali_liberi}"),
-        HumanMessage(content=state['user_input'])
-    ]
-    try:
-        risposta = llm.invoke(prompt).content
-    except Exception:
-        risposta = "Errore di lettura."
-    return {"bot_response": risposta}
+    if not slot_filtrati:
+        return {"bot_response": "Mi dispiace, ma al momento non abbiamo slot liberi per il periodo richiesto. Desideri valutare altre date?"}
+        
+    # Costruiamo una stringa leggibile partendo dagli oggetti JSON filtrati da Python
+    stringa_opzioni = ""
+    for s in slot_filtrati:
+        dt = datetime.fromisoformat(s["data_ora"])
+        stringa_opzioni += f"- {dt.strftime('%A %d %B alle ore %H:%M')} (ID: {s['id']})\n"
+        
+    prompt = f"Genera un messaggio cordiale proponendo all'utente ESCLUSIVAMENTE queste opzioni disponibili:\n{stringa_opzioni}\nChiedi quale preferisce confermare."
+    risposta = llm.invoke([HumanMessage(content=prompt)]).content
+    return {"bot_response": risposta, "booking_status": "In corso"}
 
 def conferma_node(state: State) -> Dict:
-    """Identifica la data calcolata, la valida e la elimina dal file txt"""
-    slot_disponibili = get_free_slots_from_txt()
-    contesto_temporale = get_current_time_context()
+    """Esegue la cancellazione atomica modificando il JSON strutturato"""
+    dati = state["dati_estratti"]
+    # Troviamo lo slot filtrando per giorno ed eventualmente ora passati nel JSON dello stato
+    slot_idonei = filtra_slot_python(dati["orizzonte_temporale"], dati["giorno_indicato"])
     
-    prompt = f"""{contesto_temporale}
-    LISTA DISPONIBILE:
-    {slot_disponibili}
-    
-    SCELTA UTENTE:
-    "{state['user_input']}"
-    
-    Converti la scelta dell'utente (es. 'domani', 'venerdì') nella riga esatta così come appare nella LISTA DISPONIBILE (es. '2026-07-31 09:00').
-    Rispondi esclusivamente con la stringa esatta trovata in lista, altrimenti scrivi 'ERRORE'."""
-    
-    try:
-        slot_estratto = llm.invoke([HumanMessage(content=prompt)]).content.strip()
-    except Exception:
-        logger.exception("Errore in conferma_node")
-        return {"booking_status": "In corso", "bot_response": "Errore temporaneo.", "slot_selezionato": ""}
+    if dati["ora_indicata"]:
+        slot_idonei = [s for s in slot_idonei if dati["ora_indicata"] in s["data_ora"]]
         
-    slot_validi = [riga.strip() for riga in slot_disponibili.splitlines() if riga.strip()]
-    
-    match_trovato = None
-    for sv in slot_validi:
-        if slot_estratto.lower() in sv.lower() or sv.lower() in slot_estratto.lower():
-            match_trovato = sv
+    if not slot_idonei:
+        return {"bot_response": "Non sono riuscito a trovare uno slot corrispondente libero nel nostro sistema. Puoi indicarmi un orario tra quelli proposti?"}
+        
+    # Se c'è ambiguità o troppi slot per quel giorno e l'utente non ha specificato l'ora
+    if len(slot_idonei) > 1 and not dati["ora_indicata"]:
+        stringa_orari = ", ".join([datetime.fromisoformat(s["data_ora"]).strftime("%H:%M") for s in slot_idonei])
+        return {"bot_response": f"Per quel giorno ho più orari disponibili ({stringa_orari}). Quale preferisci di preciso?"}
+        
+    # Scegliamo lo slot target ed eseguiamo la scrittura logica (disponibile = false)
+    slot_scelto = slot_idonei[0]
+    tutti_i_dati = leggi_calendario()
+    for s in tutti_i_dati:
+        if s["id"] == slot_scelto["id"]:
+            s["disponibile"] = False
             break
             
-    if not match_trovato or "ERRORE" in slot_estratto:
-        return {
-            "booking_status": "In corso",
-            "bot_response": "Non ho trovato una corrispondenza esatta per quel giorno. Puoi specificare meglio data e ora?",
-            "slot_selezionato": ""
-        }
-        
-    successo = remove_slot_from_txt(match_trovato)
-    if not successo:
-        return {
-            "booking_status": "In corso",
-            "bot_response": "Slot non disponibile.",
-            "slot_selezionato": ""
-        }
-        
+    scrivi_calendario(tutti_i_dati)
+    dt_confermata = datetime.fromisoformat(slot_scelto["data_ora"]).strftime("%d %B alle %H:%M")
+    
     return {
         "booking_status": "CONFERMATA",
-        "bot_response": f"🎉 Prenotazione confermata per lo slot **{match_trovato}**. L'orario è stato rimosso dal sistema!",
-        "slot_selezionato": match_trovato
+        "bot_response": f"🎉 Ottimo! Ho registrato la tua scelta. Il tuo appuntamento è fissato per **{dt_confermata}**. Lo slot è stato bloccato."
     }
 
-def fallback_node(state: State) -> Dict:
-    prompt = [SystemMessage(content="Rispondi in modo naturale e conciso."), HumanMessage(content=state['user_input'])]
-    try:
-        risposta = llm.invoke(prompt).content
-    except Exception:
-        risposta = "Sono qui."
+def info_node(state: State) -> Dict:
+    slot_liberi = filtra_slot_python("tutti", None)
+    prompt = f"Fornisci un riassunto sintetico basandoti solo su questi ID e date disponibili nel gestionale:\n{str(slot_liberi)}"
+    risposta = llm.invoke([HumanMessage(content=prompt)]).content
     return {"bot_response": risposta}
 
-# --- 3. LOGICA DEI BORDI ---
-def route_decision(state: State) -> str:
-    azione = state.get("graph_action")
-    if azione == "vai_a_conferma": return "conferma"
-    elif azione == "vai_a_booking": return "booking"
-    elif azione == "vai_a_info": return "info"
-    else: return "fallback"
+def fallback_node(state: State) -> Dict:
+    risposta = llm.invoke([SystemMessage(content="Rispondi brevemente e con cortesia."), HumanMessage(content=state['user_input'])]).content
+    return {"bot_response": risposta}
 
-# --- 4. COSTRUZIONE DEL GRAFO ---
+# --- LOGICA BORDI E GRAFO ---
+def route_decision(state: State) -> str:
+    mappa = {"vai_a_conferma": "conferma", "vai_a_booking": "booking", "vai_a_info": "info"}
+    return mappa.get(state.get("graph_action"), "fallback")
+
 builder = StateGraph(State)
 builder.add_node("router", router_node)
 builder.add_node("booking", booking_node)
@@ -230,29 +190,28 @@ builder.add_edge("booking", END)
 builder.add_edge("info", END)
 builder.add_edge("conferma", END)
 builder.add_edge("fallback", END)
-
 graph = builder.compile()
 
-# --- 5. INTERFACCIA CHAT STREAMLIT ---
+# --- CHAT STREAMLIT ---
 if "messages" not in st.session_state: st.session_state.messages = []
 if "booking_status" not in st.session_state: st.session_state.booking_status = "Nessuna"
+if "storico_dati" not in st.session_state: st.session_state.storico_dati = {}
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]): st.markdown(message["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
 if prompt_utente := st.chat_input("Scrivi qui..."):
     with st.chat_message("user"): st.markdown(prompt_utente)
     st.session_state.messages.append({"role": "user", "content": prompt_utente})
-
+    
+    # Lo stato ora eredita i dati strutturati estratti nei turni precedenti per non soffrire di amnesia
     stato_iniziale = {
         "user_input": prompt_utente,
         "booking_status": st.session_state.booking_status,
-        "graph_action": "", "bot_response": "", "slot_selezionato": ""
+        "graph_action": "", "bot_response": "",
+        "dati_estratti": st.session_state.storico_dati
     }
-
-    with st.spinner("🤖 Elaborazione..."):
-        risultato_grafo = graph.invoke(stato_iniziale)
-        risposta_finale = risultato_grafo["bot_response"]
-        st.session_state.booking_status = risultato_grafo["booking_status"]
-
-    with st.chat_message("assistant"): st.markdown(risposta_finale)
+    
+    with st.spinner("🤖 Elaborazione deterministica in corso..."):
+        risultato = graph.invoke(stato_iniziale)
+        
