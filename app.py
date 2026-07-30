@@ -76,7 +76,7 @@ class State(TypedDict):
 
 # --- 2. DEFINIZIONE DEI NODI ---
 def router_node(state: State) -> Dict:
-    """Analizza il testo per capire se l'utente sta CONFERMANDO uno slot preciso o se vuole solo info"""
+    """Analizza il testo in modo intelligente. Capisce le conferme dirette o implicite (es: solo il giorno)"""
     slot_reali = get_free_slots_from_txt()
     
     prompt = f"""Analizza il messaggio dell'utente e decidi l'azione corretta da prendere.
@@ -86,11 +86,13 @@ def router_node(state: State) -> Dict:
     
     Messaggio utente: "{state['user_input']}"
     
-    Rispondi ESCLUSIVAMENTE con una di queste tre parole:
-    - 'CONFERMA': se l'utente accetta, sceglie o conferma chiaramente uno degli slot sopra indicati (es: "Prendo lunedì alle 11:30", "Ok per martedì 15:30", "confermo per venerdì").
-    - 'PRENOTAZIONE': se l'utente esprime solo il desiderio generale di prenotare o chiede quali sono i posti liberi.
-    - 'ALTRO': se saluta, ringrazia o fa domande non inerenti.
+    Regole di classificazione:
+    - Rispondi 'CONFERMA': se l'utente accetta, sceglie o conferma uno degli slot (es: "Prendo lunedì alle 11:30", "Ok per martedì"). 
+      IMPORTANTE: Se l'utente menziona solo il giorno (es: "venerdì va bene", "voglio martedì") e nella lista degli slot c'è quell'opzione, considerala come una CONFERMA.
+    - Rispondi 'PRENOTAZIONE': se l'utente chiede in generale quali sono i posti liberi o esprime solo il desiderio generico di prenotare senza sbilanciarsi.
+    - Rispondi 'ALTRO': se saluta, ringrazia o fa domande non inerenti.
     
+    Rispondi ESCLUSIVAMENTE con una di queste tre parole: CONFERMA, PRENOTAZIONE, ALTRO.
     Risposta:"""
     
     risposta_llm = llm.invoke([HumanMessage(content=prompt)]).content.strip().upper()
@@ -102,57 +104,32 @@ def router_node(state: State) -> Dict:
     else:
         return {"graph_action": "vai_a_fallback"}
 
-def booking_node(state: State) -> Dict:
-    """Mostra i posti liberi leggendo dal file txt"""
-    slot_reali_liberi = get_free_slots_from_txt()
-    
-    prompt = [
-        SystemMessage(content=(
-            "Sei l'assistente per le prenotazioni.\n"
-            "Proponi ESCLUSIVAMENTE gli slot presenti in questa lista forniti in tempo reale dal nostro registro. "
-            "Se l'utente ha chiesto un giorno specifico, isola solo quelli di quel giorno.\n\n"
-            f"LISTA SLOT DISPONIBILI:\n{slot_reali_liberi}\n"
-            "Chiedi esplicitamente all'utente di confermare quale orario preferisce accettare."
-        )),
-        HumanMessage(content=state['user_input'])
-    ]
-    risposta = llm.invoke(prompt).content
-    return {"booking_status": "In corso", "bot_response": risposta, "slot_selezionato": ""}
-
 def conferma_node(state: State) -> Dict:
-    """Nodo critico: estrae la riga esatta scelta dall'utente, la cancella dal file e conferma"""
+    """Nodo critico: estrae la riga esatta, gestendo anche conferme parziali (es: solo il giorno)"""
     slot_reali_liberi = get_free_slots_from_txt()
     
-    # Chiediamo a OpenAI di estrarre la stringa ESATTA presente nel file txt che l'utente ha scelto
     prompt_estrazione = f"""Trova quale riga della lista corrisponde alla scelta dell'utente.
     LISTA DISPONIBILE NEL FILE:
     {slot_reali_liberi}
     
     Scelta dell'utente: "{state['user_input']}"
     
-    Rispondi ESCLUSIVAMENTE con la riga esatta presa dalla lista (es: "Venerdì - 10:30"). Se non trovi una corrispondenza esatta, rispondi 'ERRORE'.
+    Regola speciale: Se l'utente ha scritto solo il giorno (es: "venerdì va bene") e nella lista c'è un solo slot per quel giorno (es: "Venerdì - 10:30"), seleziona quella riga.
+    
+    Rispondi ESCLUSIVAMENTE con la riga esatta presa dalla lista (es: "Venerdì - 10:30"). Se non trovi nessuna corrispondenza logica, rispondi 'ERRORE'.
     Risposta:"""
     
     stringa_slot = llm.invoke([HumanMessage(content=prompt_estrazione)]).content.strip()
     
     if "ERRORE" not in stringa_slot:
-        # Eseguiamo la cancellazione fisica dal file txt
         successo = remove_slot_from_txt(stringa_slot)
         if successo:
-            risposta_conferma = f"🎉 Perfetto! Ho registrato la tua prenotazione per **{stringa_slot}**. Lo slot è stato ufficialmente bloccato."
+            risposta_conferma = f"🎉 Perfetto! Ho capito che preferisci il formato **{stringa_slot}**. Ho appena controllato il registro, rimosso la disponibilità e confermato la tua visita!"
             return {"booking_status": "CONFERMATA", "bot_response": risposta_conferma, "slot_selezionato": stringa_slot}
             
-    risposta_errore = "Non sono riuscito a trovare o bloccare l'orario richiesto. Potrebbe essere stato appena occupato. Ti dispiace scegliere un altro slot?"
+    risposta_errore = "Non sono riuscito a identificare l'orario preciso o lo slot è già occupato. Ti dispiace indicarmi l'orario completo della lista?"
     return {"booking_status": "In corso", "bot_response": risposta_errore, "slot_selezionato": ""}
 
-def fallback_node(state: State) -> Dict:
-    """Gestisce chiacchiere o saluti generali"""
-    prompt = [
-        SystemMessage(content="Sei un assistente virtuale cordiale. Rispondi in modo naturale e conciso."),
-        HumanMessage(content=state['user_input'])
-    ]
-    risposta = llm.invoke(prompt).content
-    return {"bot_response": risposta}
 
 
 # --- 3. LOGICA DEI BORDI CONDIZIONALI ---
