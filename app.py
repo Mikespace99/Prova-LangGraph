@@ -60,7 +60,8 @@ def filtra_slot_python(orizzonte: str, giorno: Optional[str]) -> list:
     
     # Calcolo inizio e fine prossima settimana (Prossimo Lunedì)
     giorni_a_lunedi = (0 - oggi.weekday()) % 7
-    if i_giorni_a_lunedi := giorni_a_lunedi == 0: giorni_a_lunedi = 7
+    if giorni_a_lunedi == 0: 
+        giorni_a_lunedi = 7
     inizio_prossima = (oggi + timedelta(days=giorni_a_lunedi)).replace(hour=0, minute=0, second=0)
     fine_prossima = inizio_prossima + timedelta(days=7)
     
@@ -80,7 +81,7 @@ def filtra_slot_python(orizzonte: str, giorno: Optional[str]) -> list:
             continue
             
         risultato.append(s)
-    return resultado
+    return risultato
 
 # --- DEFINIZIONE DELLO STATO COMPOSITO ---
 class State(TypedDict):
@@ -103,13 +104,14 @@ def router_node(state: State) -> Dict:
         dati_json = estrazione.model_dump()
     except Exception:
         logger.exception("Fallimento estrazione strutturata")
-        dati_json = {"intento": "ALTRO", "orizzonte_temporale": "generico", "giorno_indicato": None, "ora_indicated": None}
+        dati_json = {"intento": "ALTRO", "orizzonte_temporale": "generico", "giorno_indicato": None, "ora_indicata": None}
     
     # Decidi il percorso in base all'intento estratto nel JSON
     mappa_azioni = {"CONFERMA": "vai_a_conferma", "PRENOTAZIONE": "vai_a_booking", "INFO": "vai_a_info"}
     azione = mappa_azioni.get(dati_json["intento"], "vai_a_fallback")
     
-    return {"graph_action": action, "dati_estratti": dati_json}
+    # FIX: Corretto 'action' in 'azione'
+    return {"graph_action": azione, "dati_estratti": dati_json}
 
 def booking_node(state: State) -> Dict:
     """Prende i dati filtrati matematicamente da Python e genera la risposta d'aiuto"""
@@ -146,7 +148,7 @@ def conferma_node(state: State) -> Dict:
         stringa_orari = ", ".join([datetime.fromisoformat(s["data_ora"]).strftime("%H:%M") for s in slot_idonei])
         return {"bot_response": f"Per quel giorno ho più orari disponibili ({stringa_orari}). Quale preferisci di preciso?"}
         
-    # Scegliamo lo slot target ed eseguiamo la scrittura logica (disponibile = false)
+    # FIX: Selezioniamo correttamente il primo elemento della lista
     slot_scelto = slot_idonei[0]
     tutti_i_dati = leggi_calendario()
     for s in tutti_i_dati:
@@ -204,7 +206,6 @@ if prompt_utente := st.chat_input("Scrivi qui..."):
     with st.chat_message("user"): st.markdown(prompt_utente)
     st.session_state.messages.append({"role": "user", "content": prompt_utente})
     
-    # Lo stato ora eredita i dati strutturati estratti nei turni precedenti per non soffrire di amnesia
     stato_iniziale = {
         "user_input": prompt_utente,
         "booking_status": st.session_state.booking_status,
