@@ -28,7 +28,12 @@ TXT_FILE = "calendario.txt"
 
 
 def get_free_slots_from_txt() -> str:
-    """Legge calendario.txt ed estrae solo le righe con stato LIBERO."""
+    """Legge calendario.txt: ogni riga non vuota presente nel file è uno slot libero.
+
+    Non è previsto uno stato esplicito (LIBERO/OCCUPATO): uno slot esiste
+    nel file finché non viene prenotato, momento in cui la riga viene
+    rimossa da remove_slot_from_txt.
+    """
     if not os.path.exists(TXT_FILE):
         return "Errore: Il file 'calendario.txt' non è stato trovato sul server."
 
@@ -36,9 +41,8 @@ def get_free_slots_from_txt() -> str:
     with open(TXT_FILE, "r", encoding="utf-8") as file:
         for riga in file:
             riga = riga.strip()
-            if riga and "LIBERO" in riga.upper():
-                pulita = riga.replace(" - LIBERO", "").replace(" - libero", "")
-                elenco_liberi += f"- {pulita}\n"
+            if riga:
+                elenco_liberi += f"- {riga}\n"
 
     if not elenco_liberi:
         return "Nessuno slot disponibile al momento nel file."
@@ -47,15 +51,14 @@ def get_free_slots_from_txt() -> str:
 
 
 def remove_slot_from_txt(slot: str) -> bool:
-    """Marca come OCCUPATO lo slot corrispondente nel file calendario.txt.
+    """Rimuove definitivamente la riga corrispondente a 'slot' da calendario.txt.
 
     'slot' arriva nel formato pulito (es. 'Lunedì - 09:00'), lo stesso
-    prodotto da get_free_slots_from_txt. Cerca la riga originale che
-    contiene quel testo e la sostituisce, mantenendo LIBERO/OCCUPATO
-    come stato coerente nel file.
+    presente nel file. Prenotare uno slot equivale a eliminarne la riga:
+    da quel momento non comparirà più tra le disponibilità.
 
-    Ritorna True se la riga è stata trovata e aggiornata, False altrimenti
-    (es. slot non esistente o già occupato).
+    Ritorna True se la riga è stata trovata e rimossa, False altrimenti
+    (es. slot inesistente o già prenotato da un'altra richiesta).
     """
     if not os.path.exists(TXT_FILE):
         logger.error("calendario.txt non trovato durante remove_slot_from_txt")
@@ -64,17 +67,15 @@ def remove_slot_from_txt(slot: str) -> bool:
     with open(TXT_FILE, "r", encoding="utf-8") as file:
         righe = file.readlines()
 
-    aggiornato = False
+    rimosso = False
     nuove_righe = []
     for riga in righe:
-        riga_pulita = riga.strip()
-        if riga_pulita.startswith(slot) and "LIBERO" in riga_pulita.upper():
-            nuove_righe.append(f"{slot} - OCCUPATO\n")
-            aggiornato = True
-        else:
-            nuove_righe.append(riga)
+        if not rimosso and riga.strip() == slot:
+            rimosso = True
+            continue
+        nuove_righe.append(riga)
 
-    if not aggiornato:
+    if not rimosso:
         return False
 
     with open(TXT_FILE, "w", encoding="utf-8") as file:
