@@ -123,7 +123,7 @@ if prompt_utente := st.chat_input("Come posso aiutarti?"):
     }
 
     # Esegui il grafo
-    con ricarica_animazione = st.spinner("🤖 Sto pensando..."):
+    with st.spinner("🤖 Sto pensando..."):
         risultato_grafo = graph.invoke(stato_corrente)
         risposta_finale = risultato_grafo["bot_response"]
 
